@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+# Standalone Rust replacement for the DataLens auth container (login, JWT, users).
+ARG VERSION_TAG=dev
+
+FROM rust:1-alpine AS build
+RUN apk add --no-cache musl-dev pkgconfig ca-certificates
+WORKDIR /src
+COPY auth/Cargo.toml auth/Cargo.lock ./
+COPY auth/src ./src
+COPY auth/tests ./tests
+RUN cargo build --release \
+ && cp target/release/datalens-auth-rs /src/auth-bin
+
+FROM scratch
+ARG VERSION_TAG
+LABEL org.opencontainers.image.title="datalens-auth-rs" \
+      org.opencontainers.image.version="${VERSION_TAG}"
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /src/auth-bin /usr/local/bin/auth
+ENV AUTH_PORT=8097
+EXPOSE 8097
+ENTRYPOINT ["/usr/local/bin/auth"]
