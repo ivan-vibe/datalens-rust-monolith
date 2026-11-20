@@ -87,6 +87,23 @@ docker compose down -v     # остановить и удалить volume (де
 `./deploy/bootstrap.sh` (сгенерирует ключи в `deploy/secrets/compose.secrets.yml`,
 `cluster.sh` подхватит его поверх дефолтов).
 
+## Rust auth вместо официального контейнера
+
+В compose по умолчанию стоит официальный `datalens-auth:0.27.0`: он сам создаёт схему
+`pg-auth-db` и демо-пользователя (`AUTH_ADMIN_PASSWORD=admin`). Наш `datalens-auth-rs`
+(`auth/`) — drop-in замена с тем же HTTP-протоколом, cookie и таблицами, но **схему он не
+создаёт**. Порядок:
+
+1. один раз подними стек как есть — официальный auth создаст схему и `admin`;
+2. собери `auth/`: `cd auth && cargo build --release` → `datalens-auth-rs` (~3.4 MB);
+3. замени сервис `auth` на `build: {context: .., dockerfile: deploy/Dockerfile.auth}` или
+   запусти бинарник с `AUTH_POSTGRES_DSN`, `AUTH_PORT`, `TOKEN_PUBLIC_KEY`,
+   `TOKEN_PRIVATE_KEY`, `AUTH_MASTER_TOKEN`;
+4. UI ходит в него по `AUTH_ENDPOINT` (`http://auth:8080` в compose).
+
+Проверено: `cd auth && cargo test --release` — 22 теста; `signin` выдаёт JWT, который
+монолит принимает тем же публичным ключом (`/v1/structure-items` → 200).
+
 ## Сборка без Docker
 
 MSRV: Rust **1.85+**.
