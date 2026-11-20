@@ -80,6 +80,26 @@ pub async fn serve(port: u16, _data_api: u16, _us: u16, _engine: u16) -> std::io
     .await
 }
 
+
+/// Loopback plus the private ranges a container network uses (Docker Desktop on macOS
+/// hands out `192.168.65.0/24`, compose bridges use `172.16.0.0/12`, Linux hosts may use
+/// `10.0.0.0/8`). Anything publicly routable is still refused.
+fn is_internal_peer(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1])
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
 /// Reject the service-internal `/private/*` surface for non-loopback peers.
 async fn internal_only(request: Request, next: middleware::Next) -> Response {
     let private = request
@@ -88,12 +108,15 @@ async fn internal_only(request: Request, next: middleware::Next) -> Response {
         .strip_prefix("/private")
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
     if private {
-        let loopback = request
+        // The UI container reaches the monolith over the compose bridge, so its peer is a
+        // private address, not loopback. The monolith port is published on the host loopback
+        // only, and `/private/*` stays closed to anything outside loopback/RFC1918/link-local.
+        let allowed = request
             .extensions()
             .get::<ConnectInfo<std::net::SocketAddr>>()
-            .map(|ConnectInfo(address)| address.ip().is_loopback())
+            .map(|ConnectInfo(address)| is_internal_peer(address.ip()))
             .unwrap_or(false);
-        if !loopback {
+        if !allowed {
             return (StatusCode::FORBIDDEN, "private API is internal").into_response();
         }
     }
@@ -168,4 +191,33 @@ fn text(status: StatusCode, message: &str) -> Response {
     *response.status_mut() = status;
     response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_internal_peer;
+
+    #[test]
+    fn private_api_peers_are_loopback_and_container_networks() {
+        for allowed in [
+            "127.0.0.1",
+            "::1",
+            "192.168.65.1", // Docker Desktop host gateway
+            "172.17.0.2",   // compose bridge
+            "10.1.2.3",
+            "169.254.1.1",
+            "fd00::1",
+        ] {
+            assert!(
+                is_internal_peer(allowed.parse().expect("ip")),
+                "{allowed} must reach /private/*"
+            );
+        }
+        for refused in ["8.8.8.8", "1.1.1.1", "2001:4860:4860::8888"] {
+            assert!(
+                !is_internal_peer(refused.parse().expect("ip")),
+                "{refused} must not reach /private/*"
+            );
+        }
+    }
 }
