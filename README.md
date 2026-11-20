@@ -37,51 +37,55 @@ scripts/                 сборка и вспомогательные утил
 
 ## Готовые бинарники
 
-Готовые бинарники в git не хранятся (чтобы не раздувать репозиторий): соберите их
-локально или в Docker — `cargo build --release` / `./deploy/cluster.sh up`
-(для Linux обеих архитектур: amd64 и arm64).
+В git они не лежат — соберите локально (`cargo build --release`) или возьмите из
+[GitHub Releases](../../releases) этой сборки: `macOS arm64`, `macOS x86_64`,
+`Linux x86_64` (musl, статический), `Windows x86_64`. Каждый — один бинарник
+(~18 MB), серверная часть целиком.
 
 ## Быстрый старт (Docker)
 
-Требования: Docker + docker compose v2, ~4 GB RAM, свободные порты `8091`, `8092`, `8099`.
-
-* **Ubuntu / Linux**: `./deploy/cluster.sh up`
-* **Windows 10/11**: Docker Desktop с бэкендом **WSL2** + дистрибутив Ubuntu
-  (`wsl --install -d Ubuntu`). Дальше либо в терминале Ubuntu:
-  `cd /mnt/c/path/to/datalens-rust-monolith && ./deploy/cluster.sh up`,
-  либо из PowerShell: `.\deploy\cluster.ps1 up` (обёртка вызывает WSL). Контейнеры
-  Linux — на Windows работают через Docker Desktop, отдельные Windows-бинарники не нужны.
-* **macOS**: Docker Desktop, `./deploy/cluster.sh up`.
+Требования: Docker + docker compose v2, ~4 GB RAM, свободные порты `8091`, `8099`.
 
 ```bash
 git clone <repo> datalens-rust-monolith && cd datalens-rust-monolith
-./deploy/cluster.sh up        # соберёт образы (первый раз ~10 мин), поднимет кластер
+docker compose up -d --build        # первый раз ~10 мин: сборка образов + демо-данные
 ```
 
-Первый запуск делает всё сам:
+Или та же команда через обёртку: `./deploy/cluster.sh up`.
 
-1. `deploy/bootstrap.sh` генерирует self-signed TLS-сертификат, пару ключей PS256 и
-   master-токены (в `deploy/secrets/`, gitignored);
-2. Postgres-контейнер разворачивает дампы из `deploy/seed/*.dump` (US-схема 1.39 + демо-данные,
-   auth, meta-manager, compeng, demo);
-3. собираются `monolith` и `auth`, поднимается `datalens-ui:0.3831.0`.
+Первый запуск:
 
-Открыть:
+1. официальный `ghcr.io/datalens-tech/datalens-postgres:16-1.3.0` создаёт базы
+   `pg-us-db`, `pg-auth-db`, `pg-meta-manager-db`, `pg-demo-db` и демо-схему;
+2. `monolith` накатывает US-миграции и поднимается на `:8099`;
+3. one-shot сервис `seed` заливает **официальные демо-данные** из `/init/demo-data` того же
+   образа Postgres — в репозитории нет ни одного дампа и ни одной пользовательской строки;
+4. поднимаются `auth` и `datalens-ui:0.3831.0`.
 
 | URL | Что |
 |---|---|
-| `http://localhost:8091` | UI, HTTP/1.1 |
-| `https://localhost:8092` | UI, TLS + HTTP/2 (self-signed — принять исключение браузера) |
+| `http://localhost:8091` | UI |
 | `http://localhost:8099/ping` | монолит (API) |
 
-Логин: **admin / admin** (демо-пользователь из seed). Смените пароль сразу после первого входа.
+Логин: **admin / admin** (демо-пользователь официального образа). Смените пароль.
 
 Остановить / снести:
 
 ```bash
-./deploy/cluster.sh down      # остановить, volume с БД сохранить
-./deploy/cluster.sh reset     # остановить и удалить volume (при следующем up БД пересоздастся)
+docker compose down        # остановить, volume с БД сохранить
+docker compose down -v     # остановить и удалить volume (демо-данные зальются заново)
 ```
+
+### Ключи по умолчанию
+
+В `deploy/docker-compose.yml` стоят **публичные демо-ключи открытого DataLens** (те же, что
+в официальном `datalens-tech/datalens`): пара PS256, `US_MASTER_TOKEN=us-master-token`,
+`AUTH_MASTER_TOKEN=auth-master-token`, fernet-ключ для паролей подключений. Они нужны, чтобы
+демо работало «из коробки», и **не являются секретами** — они опубликованы upstream.
+
+Для чего-то большего демо переопределите их своим окружением или запустите
+`./deploy/bootstrap.sh` (сгенерирует ключи в `deploy/secrets/compose.secrets.yml`,
+`cluster.sh` подхватит его поверх дефолтов).
 
 ## Сборка без Docker
 
@@ -93,7 +97,7 @@ cd auth && cargo build --release   # → auth/target/release/datalens-auth-rs
 ```
 
 Запуск на хосте требует внешнего PostgreSQL с базами `pg-us-db`, `pg-auth-db`,
-`pg-meta-manager-db`, `pg-demo-db` (можно взять из `deploy/seed/`). Переменные окружения —
+`pg-meta-manager-db`, `pg-demo-db` (демо-данные — из официального образа Postgres). Переменные окружения —
 как в `deploy/docker-compose.yml` (сервисы `monolith`/`auth`), с поправкой на адреса БД;
 `POSTGRES_DSN_LIST` указывает на `pg-us-db`, `META_MANAGER_PG_DSN` — на `pg-meta-manager-db`.
 
